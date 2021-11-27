@@ -241,7 +241,7 @@ class PrinterMotionReport:
         self.last_status = {
             'live_position': gcode.Coord(0., 0., 0., 0.),
             'live_velocity': 0., 'live_extruder_velocity': 0.,
-            'steppers': [], 'trapq': [],
+            'steppers': [], 'trapq': [], 'mcu_position': {},
         }
         # Register handlers
         self.printer.register_event_handler("klippy:connect", self._connect)
@@ -266,6 +266,7 @@ class PrinterMotionReport:
             self.trapqs[ename] = DumpTrapQ(self.printer, ename, etrapq)
         # Populate 'trapq' and 'steppers' in get_status result
         self.last_status['steppers'] = list(sorted(self.steppers.keys()))
+        self.last_status['mcu_position'] = dict((s.get_name(), s.get_mcu_position()) for s in toolhead.get_kinematics().get_steppers())
         self.last_status['trapq'] = list(sorted(self.trapqs.keys()))
     # Shutdown handling
     def _dump_shutdown(self, eventtime):
@@ -324,6 +325,7 @@ class PrinterMotionReport:
                 evelocity = velocity
         # Report status
         self.last_status = dict(self.last_status)
+        self.last_status['mcu_position'] = dict((s.get_name(), s.get_mcu_position()) for s in toolhead.get_kinematics().get_steppers())
         self.last_status['live_position'] = toolhead.Coord(*(xyzpos + epos))
         self.last_status['live_velocity'] = xyzvelocity
         self.last_status['live_extruder_velocity'] = evelocity
