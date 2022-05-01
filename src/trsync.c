@@ -40,6 +40,7 @@ trsync_do_trigger(struct trsync *ts, uint8_t reason)
         tss->next = NULL;
         tss->func = NULL;
         func(tss, reason);
+        tss->dataptr = NULL;
     }
     sched_wake_task(&trsync_wake);
 }
@@ -83,15 +84,29 @@ trsync_oid_lookup(uint8_t oid)
 // Add a callback to invoke on a trigger
 void
 trsync_add_signal(struct trsync *ts, struct trsync_signal *tss
-                  , trsync_callback_t func)
+                  , trsync_callback_t func, void *dataptr)
 {
     irqstatus_t flag = irq_save();
     if (tss->func || !func)
         shutdown("Can't add signal that is already active");
     tss->func = func;
+    tss->dataptr = dataptr;
     tss->next = ts->signals;
     ts->signals = tss;
     irq_restore(flag);
+}
+
+// Callback used for signals that have been removed
+// This is cheaper than a doubley linked list
+static void removed_signal(struct trsync_signal *tss, uint8_t reason){
+    return;
+}
+
+// Remove a signal from the trigger that it's registered under (caller must disable IRQs)
+void
+trsync_remove_signal(struct trsync_signal *tss)
+{
+    tss->func = removed_signal;
 }
 
 // Disable trigger and unregister any signal handlers (caller must disable IRQs)
@@ -104,6 +119,7 @@ trsync_clear(struct trsync *ts)
     while (tss) {
         struct trsync_signal *next = tss->next;
         tss->func = NULL;
+        tss->dataptr = NULL;
         tss->next = NULL;
         tss = next;
     }

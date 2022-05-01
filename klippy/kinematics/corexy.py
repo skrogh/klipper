@@ -49,10 +49,14 @@ class CoreXYKinematics:
     def home(self, homing_state):
         # Each axis is homed independently and in order
         for axis in homing_state.get_axes():
-            rail = self.rails[axis]
+            # When homing x or y both x and y rails will move
+            # When performing sensorless homing the endstops for both rails should be acitve
+            # as both rails are moving and will stall when hitting the end of the rail.
+            main_rail = self.rails[axis]
+            rails = [main_rail] if axis == 2 else [self.rails[0], self.rails[1]]
             # Determine movement
-            position_min, position_max = rail.get_range()
-            hi = rail.get_homing_info()
+            position_min, position_max = main_rail.get_range()
+            hi = main_rail.get_homing_info()
             homepos = [None, None, None, None]
             homepos[axis] = hi.position_endstop
             forcepos = list(homepos)
@@ -61,7 +65,7 @@ class CoreXYKinematics:
             else:
                 forcepos[axis] += 1.5 * (position_max - hi.position_endstop)
             # Perform homing
-            homing_state.home_rails([rail], forcepos, homepos)
+            homing_state.home_rails(rails, forcepos, homepos)
     def _motor_off(self, print_time):
         self.limits = [(1.0, -1.0)] * 3
     def _check_endstops(self, move):

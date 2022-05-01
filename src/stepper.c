@@ -28,6 +28,7 @@
  #define HAVE_EDGE_OPTIMIZATION 0
  #define HAVE_AVR_OPTIMIZATION 0
 #endif
+#define STEPPER_MAX_PARALLEL_ENDSTOPS 2
 
 struct stepper_move {
     struct move_node node;
@@ -48,7 +49,7 @@ struct stepper {
     struct gpio_out step_pin, dir_pin;
     uint32_t position;
     struct move_queue_head mq;
-    struct trsync_signal stop_signal;
+    struct trsync_signal stop_signal[STEPPER_MAX_PARALLEL_ENDSTOPS];
     // gcc (pre v6) does better optimization when uint8_t are bitfields
     uint8_t flags : 8;
 };
@@ -311,7 +312,10 @@ DECL_COMMAND(command_stepper_get_position, "stepper_get_position oid=%c");
 static void
 stepper_stop(struct trsync_signal *tss, uint8_t reason)
 {
-    struct stepper *s = container_of(tss, struct stepper, stop_signal);
+    sendf("stopped");
+    struct stepper *s = (struct stepper*) tss->dataptr;
+
+    // Prioritize stopping the stepper
     sched_del_timer(&s->time);
     s->next_step_time = s->time.waketime = 0;
     s->position = -stepper_get_position(s);
@@ -325,15 +329,33 @@ stepper_stop(struct trsync_signal *tss, uint8_t reason)
         struct stepper_move *m = container_of(mn, struct stepper_move, node);
         move_free(m);
     }
+    // Stop listening on other triggers
+    for (uint_fast8_t i=0; i<STEPPER_MAX_PARALLEL_ENDSTOPS; i++) {
+        struct trsync_signal *tssi = &s->stop_signal[i];
+        if (tssi->func) {
+            trsync_remove_signal(tssi);
+        }
+    }
 }
 
 // Set the stepper to stop on a "trigger event" (used in homing)
 void
 command_stepper_stop_on_trigger(uint32_t *args)
 {
-    struct stepper *s = stepper_oid_lookup(args[0]);
-    struct trsync *ts = trsync_oid_lookup(args[1]);
-    trsync_add_signal(ts, &s->stop_signal, stepper_stop);
+    uint8_t soid = args[0];
+    uint8_t tsoid = args[1];
+
+    struct stepper *s = stepper_oid_lookup(soid);
+    struct trsync *ts = trsync_oid_lookup(tsoid);
+    
+    for (uint_fast8_t i = 0; i<STEPPER_MAX_PARALLEL_ENDSTOPS; i++) {
+        if (!s->stop_signal[i].func) {
+            sendf("stop_on_trigger soid=%c tsoid=%c i=%u", soid, tsoid, i);
+            trsync_add_signal(ts, &s->stop_signal[i], stepper_stop, (void*) s);
+            return;
+        }
+    }
+    shutdown("Can't add trigger to stepper, as all signals are in use");
 }
 DECL_COMMAND(command_stepper_stop_on_trigger,
              "stepper_stop_on_trigger oid=%c trsync_oid=%c");
@@ -345,7 +367,7 @@ stepper_shutdown(void)
     struct stepper *s;
     foreach_oid(i, s, command_config_stepper) {
         move_queue_clear(&s->mq);
-        stepper_stop(&s->stop_signal, 0);
+        stepper_stop(&s->stop_signal[0], 0);
     }
 }
 DECL_SHUTDOWN(stepper_shutdown);

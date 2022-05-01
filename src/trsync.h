@@ -9,11 +9,13 @@ typedef void (*trsync_callback_t)(struct trsync_signal *tss, uint8_t reason);
 struct trsync_signal {
     struct trsync_signal *next;
     trsync_callback_t func;
+    void* dataptr;
 };
 
 struct trsync *trsync_oid_lookup(uint8_t oid);
 void trsync_do_trigger(struct trsync *ts, uint8_t reason);
 void trsync_add_signal(struct trsync *ts, struct trsync_signal *tss
-                       , trsync_callback_t func);
+                       , trsync_callback_t func, void *dataptr);
+void trsync_remove_signal(struct trsync_signal *tss);
 
 #endif // trsync.h

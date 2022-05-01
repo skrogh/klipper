@@ -10,7 +10,7 @@ ENDSTOP_SAMPLE_TIME = .000015
 ENDSTOP_SAMPLE_COUNT = 4
 
 # Return a completion that completes when all completions in a list complete
-def multi_complete(printer, completions):
+def all_complete(printer, completions):
     if len(completions) == 1:
         return completions[0]
     # Build completion that waits for all completions
@@ -20,6 +20,18 @@ def multi_complete(printer, completions):
     for c in completions:
         reactor.register_callback(
             lambda e, c=c: cp.complete(1) if c.wait() else 0)
+    return cp
+
+# Return a completion that completes when any completions in a list complete
+def any_complete(printer, completions):
+    if len(completions) == 1:
+        return completions[0]
+    # Intermediate completion that waits for any completions
+    reactor = printer.get_reactor()
+    cp = reactor.completion()
+    # If any completion finishes, end it early
+    for c in completions:
+        reactor.register_callback(lambda e, c=c: cp.complete(c.wait()))
     return cp
 
 # Tracking of stepper positions during a homing/probing move
@@ -79,19 +91,24 @@ class HomingMove:
                                    for s in es.get_steppers() ]
         # Start endstop checking
         print_time = self.toolhead.get_last_move_time()
-        endstop_triggers = []
+        stepper_triggers = {}
+        stepper_triggered = {}
         for mcu_endstop, name in self.endstops:
             rest_time = self._calc_endstop_rate(mcu_endstop, movepos, speed)
             wait = mcu_endstop.home_start(print_time, ENDSTOP_SAMPLE_TIME,
                                           ENDSTOP_SAMPLE_COUNT, rest_time,
                                           triggered=triggered)
-            endstop_triggers.append(wait)
-        all_endstop_trigger = multi_complete(self.printer, endstop_triggers)
+            for s in mcu_endstop.get_steppers():
+                stepper_triggers.setdefault(s, []).append(wait)
+                stepper_triggered[s] = False
+        logging.info(stepper_triggers)
+        any_endstop_triggers = [any_complete(self.printer, endstop_triggers) for endstop_triggers in stepper_triggers.values()]
+        all_steppers_triggered = all_complete(self.printer, any_endstop_triggers)
         self.toolhead.dwell(HOMING_START_DELAY)
         # Issue move
         error = None
         try:
-            self.toolhead.drip_move(movepos, speed, all_endstop_trigger)
+            self.toolhead.drip_move(movepos, speed, all_steppers_triggered)
         except self.printer.command_error as e:
             error = "Error during homing move: %s" % (str(e),)
         # Wait for endstops to trigger
@@ -101,10 +118,12 @@ class HomingMove:
             trigger_time = mcu_endstop.home_wait(move_end_print_time)
             if trigger_time > 0.:
                 trigger_times[name] = trigger_time
+                for s in mcu_endstop.get_steppers():
+                    stepper_triggered[s] = True
             elif trigger_time < 0. and error is None:
                 error = "Communication timeout during homing %s" % (name,)
-            elif check_triggered and error is None:
-                error = "No trigger on %s after full movement" % (name,)
+        if check_triggered and error is None and not all(stepper_triggered.values()):
+            error = "No endstops triggered on %s after full movement" % ([s.get_name() for s, t in stepper_triggered.items() if not t],)
         # Determine stepper halt positions
         self.toolhead.flush_step_generation()
         for sp in self.stepper_positions:
